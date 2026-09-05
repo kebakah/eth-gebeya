@@ -226,6 +226,13 @@
 const ADMIN_USERNAMES = ['kibromk']; // auto-admin when this Telegram @username opens the app
 const TELEBIRR_NUMBER = '930533061';
 
+// Fill these in to get a Telegram message every time someone pays.
+// TELEGRAM_BOT_TOKEN: from @BotFather when you created the bot.
+// TELEGRAM_ADMIN_CHAT_ID: message your bot once, then visit
+//   https://api.telegram.org/bot<token>/getUpdates in a browser and copy the "chat":{"id": ...} number.
+const TELEGRAM_BOT_TOKEN = 'PUT_YOUR_BOT_TOKEN_HERE';
+const TELEGRAM_ADMIN_CHAT_ID = 'PUT_YOUR_CHAT_ID_HERE';
+
 /* ============ FIREBASE ============ */
 const firebaseConfig = {
   apiKey: "AIzaSyCAjISTEbYbPfbx-xCacA6aLGO5xBqpa58",
@@ -250,6 +257,8 @@ const state = {
   orders: [],
   cart: [],           // {productId, qty}
   demoRole: null,     // 'customer' | 'admin' (only used when not inside Telegram)
+  deliveryPhone: '',
+  deliveryAddress: '',
   viewingProductId: null,
   viewingOrderId: null,
   currentOrderId: null,
@@ -482,7 +491,7 @@ function renderCart(){
   }).join('')}
   <div class="cart-total-row"><span>Total</span><span class="amt">${fmt(cartTotal())} ETB</span></div>
   <div class="fixed-bar">
-    <button class="btn-primary" onclick="startCheckout()">Checkout</button>
+    <button class="btn-primary" onclick="go('delivery')">Checkout</button>
   </div>`;
 }
 function removeFromCart(id){
@@ -490,14 +499,46 @@ function removeFromCart(id){
   render();
 }
 
+/* ============ DELIVERY DETAILS ============ */
+function renderDelivery(){
+  if (state.cart.length===0){ go('catalog'); return ''; }
+  return `
+  <div class="back-btn"><button onclick="go('cart')">&larr; Back to cart</button></div>
+  <div class="form-wrap">
+    <h2 class="serif" style="margin:10px 0 6px;">Delivery details</h2>
+    <p style="color:var(--ink-soft); font-size:13.5px; margin:0 0 20px;">So we know where to send your order.</p>
+    <div class="field">
+      <label>Phone number</label>
+      <input type="tel" id="deliveryPhone" placeholder="e.g. 0912345678" value="${escapeAttr(state.deliveryPhone||'')}">
+    </div>
+    <div class="field">
+      <label>Delivery address</label>
+      <textarea id="deliveryAddress" placeholder="City, area/kebele, nearest landmark...">${escapeHtml(state.deliveryAddress||'')}</textarea>
+    </div>
+  </div>
+  <div class="fixed-bar">
+    <button class="btn-primary" onclick="confirmDelivery()">Continue to payment</button>
+  </div>`;
+}
+function confirmDelivery(){
+  const phone = (document.getElementById('deliveryPhone').value||'').trim();
+  const address = (document.getElementById('deliveryAddress').value||'').trim();
+  if (!phone || !address){ showToast('Add your phone and delivery address'); return; }
+  state.deliveryPhone = phone;
+  state.deliveryAddress = address;
+  startCheckout(phone, address);
+}
+
 /* ============ CHECKOUT / PAYMENT ============ */
-function startCheckout(){
+function startCheckout(phone, address){
   const user = getUser();
   const order = {
     id: uid().toUpperCase(),
     userId: user.id,
     username: user.username,
     userName: user.name,
+    phone: phone || '',
+    address: address || '',
     items: state.cart.map(c=>{
       const p = state.products.find(pr=>pr.id===c.productId);
       return { productId:c.productId, name:p?p.name:'Item', price:p?p.price:0, qty:c.qty };
@@ -525,7 +566,9 @@ function renderPay(){
       ${order.items.map(i=>`<div class="row"><span>${escapeHtml(i.name)} &times; ${i.qty}</span><span>${fmt(i.price*i.qty)} ETB</span></div>`).join('')}
       <div class="row total"><span>Total</span><span>${fmt(order.total)} ETB</span></div>
     </div>
-    <div class="telebirr-card">
+    <div class="kv"><span>Deliver to</span><b>${escapeHtml(order.phone||'-')}</b></div>
+    <div class="kv" style="align-items:flex-start;"><span>Address</span><b style="text-align:right; max-width:70%;">${escapeHtml(order.address||'-')}</b></div>
+    <div class="telebirr-card" style="margin-top:16px;">
       <div class="tb-label">Pay with telebirr</div>
       <div class="telebirr-number-row">
         <span class="telebirr-number">${TELEBIRR_NUMBER}</span>
@@ -546,6 +589,22 @@ function renderPay(){
 function copyNumber(){
   if (navigator.clipboard) navigator.clipboard.writeText(TELEBIRR_NUMBER).then(()=>showToast('Number copied'));
   else showToast(TELEBIRR_NUMBER);
+}
+function notifyAdminOnTelegram(order){
+  if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN.includes('PUT_YOUR')) return; // not configured yet
+  const text =
+`🛍️ New payment submitted
+Order #${order.id}
+Customer: ${order.userName}${order.username ? ' (@'+order.username+')' : ''}
+Total: ${fmt(order.total)} ETB
+Phone: ${order.phone || '-'}
+Address: ${order.address || '-'}
+Items: ${order.items.map(i=>i.name+' x'+i.qty).join(', ')}${order.note ? '\nNote: '+order.note : ''}`;
+  fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: TELEGRAM_ADMIN_CHAT_ID, text })
+  }).catch(e=>console.error('Telegram notify failed', e));
 }
 
 /* ============ UPLOAD RECEIPT ============ */
@@ -586,6 +645,7 @@ function submitReceipt(){
   order.status = 'submitted';
   order.submittedAt = Date.now();
   fsSaveOrder(order);
+  notifyAdminOnTelegram(order);
   state.pendingImageData = null;
   go('status');
 }
@@ -648,6 +708,8 @@ function renderOrderView(){
       ${o.items.map(i=>`<div class="row"><span>${escapeHtml(i.name)} &times; ${i.qty}</span><span>${fmt(i.price*i.qty)} ETB</span></div>`).join('')}
       <div class="row total"><span>Total</span><span>${fmt(o.total)} ETB</span></div>
     </div>
+    <div class="kv"><span>Deliver to</span><b>${escapeHtml(o.phone||'-')}</b></div>
+    <div class="kv" style="align-items:flex-start;"><span>Address</span><b style="text-align:right; max-width:70%;">${escapeHtml(o.address||'-')}</b></div>
     ${o.receipt ? `<img class="order-detail-receipt" src="${o.receipt}">` : ''}
     ${o.status==='rejected' ? `<div class="note-box">This payment couldn't be verified. Please contact the seller or try submitting your receipt again.</div>` : ''}
   </div>`;
@@ -782,6 +844,8 @@ function renderAdminOrderDetail(){
     </div>
     <div class="kv"><span>Customer</span><b>${escapeHtml(o.userName)}${o.username ? ' (@'+escapeHtml(o.username)+')' : ''}</b></div>
     <div class="kv"><span>Placed</span><b>${new Date(o.createdAt).toLocaleString()}</b></div>
+    <div class="kv"><span>Phone</span><b>${escapeHtml(o.phone||'-')}</b></div>
+    <div class="kv" style="align-items:flex-start;"><span>Address</span><b style="text-align:right; max-width:70%;">${escapeHtml(o.address||'-')}</b></div>
     <div class="pay-summary" style="margin-top:14px;">
       ${o.items.map(i=>`<div class="row"><span>${escapeHtml(i.name)} &times; ${i.qty}</span><span>${fmt(i.price*i.qty)} ETB</span></div>`).join('')}
       <div class="row total"><span>Total</span><span>${fmt(o.total)} ETB</span></div>
@@ -813,7 +877,7 @@ function render(){
   const app = document.getElementById('app');
   if (!state.loaded){ app.innerHTML = `<div class="empty" style="padding-top:120px;"><span class="serif">Loading…</span></div>`; return; }
   const map = {
-    'catalog': renderCatalog, 'product': renderProduct, 'cart': renderCart,
+    'catalog': renderCatalog, 'product': renderProduct, 'cart': renderCart, 'delivery': renderDelivery,
     'pay': renderPay, 'upload': renderUpload, 'status': renderStatus,
     'myorders': renderMyOrders, 'order-view': renderOrderView,
     'admin-products': renderAdminProducts, 'admin-product-form': renderAdminProductForm,
