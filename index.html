@@ -230,8 +230,8 @@ const TELEBIRR_NUMBER = '930533061';
 // TELEGRAM_BOT_TOKEN: from @BotFather when you created the bot.
 // TELEGRAM_ADMIN_CHAT_ID: message your bot once, then visit
 //   https://api.telegram.org/bot<token>/getUpdates in a browser and copy the "chat":{"id": ...} number.
-const TELEGRAM_BOT_TOKEN = 'PUT_YOUR_BOT_TOKEN_HERE';
-const TELEGRAM_ADMIN_CHAT_ID = 'PUT_YOUR_CHAT_ID_HERE';
+const TELEGRAM_BOT_TOKEN = '8808083534:AAF5ff3Zh6iJrOlCLgX98jO1SKvkoncQmrY';
+const TELEGRAM_ADMIN_CHAT_ID = '8733780354';
 
 /* ============ FIREBASE ============ */
 const firebaseConfig = {
@@ -552,6 +552,7 @@ function startCheckout(phone, address){
   state.orders.push(order);
   state.currentOrderId = order.id;
   fsSaveOrder(order);
+  notifyAdminOnTelegram(order, 'placed');
   state.cart = [];
   go('pay');
 }
@@ -590,10 +591,11 @@ function copyNumber(){
   if (navigator.clipboard) navigator.clipboard.writeText(TELEBIRR_NUMBER).then(()=>showToast('Number copied'));
   else showToast(TELEBIRR_NUMBER);
 }
-function notifyAdminOnTelegram(order){
+function notifyAdminOnTelegram(order, stage){
   if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN.includes('PUT_YOUR')) return; // not configured yet
+  const header = stage === 'placed' ? '🛒 New order placed' : '🛍️ Payment submitted';
   const text =
-`🛍️ New payment submitted
+`${header}
 Order #${order.id}
 Customer: ${order.userName}${order.username ? ' (@'+order.username+')' : ''}
 Total: ${fmt(order.total)} ETB
@@ -645,7 +647,7 @@ function submitReceipt(){
   order.status = 'submitted';
   order.submittedAt = Date.now();
   fsSaveOrder(order);
-  notifyAdminOnTelegram(order);
+  notifyAdminOnTelegram(order, 'submitted');
   state.pendingImageData = null;
   go('status');
 }
